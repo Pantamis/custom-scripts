@@ -16,35 +16,90 @@ from jmclient import YieldGeneratorBasic, ygmain, jm_single
 
 jlog = get_log()
 
-class YieldGeneratorPrivacyEnhanced(YieldGeneratorBasic):
+# PAVA (Pool Adjascent Violators Algorithm) is the algorithm used to solve the isotonic regression
+# problem. It fits a nondecreasing line to a sequence of observations in a linear order.
+# The result minimizes a score which can be interpreted as the distance of the data to the isotonic 
+# cone associated with the constraints given by the linear order. The isotonic YG
+# uses the smallest possible mixdepth for the linear order of mixdepths (considered 
+# in cyclic order) for which is the associated isotonic cone is the closest. 
+# The following code implements PAVA in O(n) and was inspired from sklearn/_isotonic.pyx
+# Credit: Nelle Varoquaux, Andrew Tulloch, Antony Lee, the scikit-learn developers
+
+def PAVA_score(y):
+    yhat = y.copy()
+    n = len(yhat)
+    target = list(range(n))
+    w = [1]*len(yhat)
+    i = 0
+    while i < n:
+        k = target[i] + 1
+        if k == n:
+            break
+        if yhat[i] < yhat[k]:
+            i = k
+            continue
+        sum_wy = w[i] * yhat[i]
+        sum_w = w[i]
+        while True:
+            # We are within a decreasing subsequence.
+            prev_y = yhat[k]
+            sum_wy += w[k] * yhat[k]
+            sum_w += w[k]
+            k = target[k] + 1
+            if k == n or prev_y < yhat[k]:
+                # Non-singleton decreasing subsequence is finished,
+                # update first entry.
+                yhat[i] = sum_wy / sum_w
+                w[i] = sum_w
+                target[i] = k - 1
+                target[k - 1] = i
+                if i > 0:
+                    # Backtrack if we can.  This makes the algorithm
+                    # single-pass and ensures O(n) complexity.
+                    i = target[i - 1]
+                # Otherwise, restart from the same point.
+                break
+    # Reconstruct the solution.
+    i = 0
+    while i < n:
+        k = target[i] + 1
+        yhat[i + 1 : k] = [yhat[i]]*(max(k-1-i,0))
+        i = k
+    return sum([(a - b)**2 for a,b in zip(y,yhat)])
+
+# Given a distribution of funds in mixdepths arranged in cyclic order,
+# compute the isotonic score for all possible linear orders or cuts.
+# Return the rank where the first mixdepth for the optimal linear
+# order is.
+
+def rank_best_order(y):
+    scores = [0]*len(y)
+    for i in range(len(y)):
+        scores[i] = PAVA_score(y[i:]+y[:i])
+    return min(range(len(y)), key = scores.__getitem__)
+
+class YieldGeneratorIsotonic(YieldGeneratorBasic):
 
     def __init__(self, wallet_service, offerconfig):
         super().__init__(wallet_service, offerconfig)
+        mix_balance = wallet_service.get_balance_by_mixdepth(verbose=False, minconfs=1)
+        self.rank = None
         
     def select_input_mixdepth(self, available, offer, amount):
-        """Mixdepths are in cyclic order and we select the mixdepth to
-        maximize the largest interval of non-available mixdepths by choosing
-        the first mixdepth available after the largest such interval.
-        This forces the biggest UTXOs to stay in a bulk of few mixdepths so
-        that the maker can always maximize the size of his orders even when
-        some coins are sent from the last to the first mixdepth"""
-        # We sort the available depths for linear scaling of the interval search
-        available = sorted(available.keys())
-        # For an available mixdepth, the smallest interval starting from this mixdepth
-        # containing all the other available mixdepths necessarily ends at the previous
-        # available mixdepth in the cyclic order. The successive difference of sorted
-        # depths is then the length of the largest interval ending at the same mixdepth
-        # without any available mixdepths, modulo the number of mixdepths if 0 is in it
-        # which is only the case for the first (in linear order) available mixdepth case
-        intervals = ([self.wallet_service.mixdepth + 1 + available[0] - available[-1]] + \
-                    [(available[i+1] - available[i]) for i in range(len(available)-1)])
-        # We return the mixdepth value at which the largest interval without
-        # available mixdepths ends. Selecting this mixdepth will send the CoinJoin
-        # outputs closer to the others available mixdepths which are after in cyclical order
-        return available[max(range(len(available)), key = intervals.__getitem__)]
+        """Returns the smallest mixdepth that can be chosen from, i.e. has enough 
+        balance but after the rank defining the linear order of mixdepths for which 
+        balances are increasing. This rank is computed with PAVA when order is created.
+        """
+        available = sorted(available.items(), 
+                           key = lambda entry: (entry[0] - self.rank)%(self.wallet_service.mixdepth + 1))
+        return available[0][0]
     
     def create_my_orders(self):
         mix_balance = self.get_available_mixdepths()
+        # Update the optimal rank for linear order now to fill potential orders without delay
+        # For each possible linear order of the mixdepth, we compute the isotonic score
+        self.rank = rank_best_order([b for m, b in sorted(mix_balance.items())])
+        jlog.info('Arrangement in linear order starting from mixdepth '+ str(self.rank))
         # We publish ONLY the maximum amount and use minsize for lower bound;
         # leave it to oid_to_order to figure out the right depth to use.
         f = '0'
@@ -99,5 +154,5 @@ class YieldGeneratorPrivacyEnhanced(YieldGeneratorBasic):
 
 
 if __name__ == "__main__":
-    ygmain(YieldGeneratorPrivacyEnhanced, nickserv_password='')
+    ygmain(YieldGeneratorIsotonic, nickserv_password='')
     jmprint('done', "success")
