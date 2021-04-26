@@ -16,56 +16,28 @@ from jmclient import YieldGeneratorBasic, ygmain, jm_single
 
 jlog = get_log()
 
-# PAVA (Pool Adjascent Violators Algorithm) is the algorithm used to solve the isotonic regression
-# problem. It fits a nondecreasing line to a sequence of observations in a linear order.
-# The result minimizes a score which can be interpreted as the distance of the data to the isotonic 
-# cone associated with the constraints given by the linear order. The isotonic YG
-# uses the smallest possible mixdepth for the linear order of mixdepths (considered 
-# in cyclic order) for which is the associated isotonic cone is the closest. 
-# The following code implements PAVA in O(n) and was inspired from sklearn/_isotonic.pyx
-# Credit: Nelle Varoquaux, Andrew Tulloch, Antony Lee, the scikit-learn developers
+# Dynamic programming to solve the L1 isotonic regression problem. It fits a nondecreasing
+# line to a sequence of observations in a linear order. The result minimizes the manhattan
+# distance of the data to the isotonic cone associated with the constraints given by the
+# linear order. The isotonic YG uses the smallest possible mixdepth for the linear order
+# of mixdepths (considered in cyclic order) for which the associated isotonic cone is
+# the closest for the manhattan distance. The following code computes it in O(n log).
 
-def PAVA_score(y):
-    yhat = y.copy()
-    n = len(yhat)
-    target = list(range(n))
-    w = [1]*len(yhat)
-    i = 0
-    while i < n:
-        k = target[i] + 1
-        if k == n:
-            break
-        if yhat[i] < yhat[k]:
-            i = k
-            continue
-        sum_wy = w[i] * yhat[i]
-        sum_w = w[i]
-        while True:
-            # We are within a decreasing subsequence.
-            prev_y = yhat[k]
-            sum_wy += w[k] * yhat[k]
-            sum_w += w[k]
-            k = target[k] + 1
-            if k == n or prev_y < yhat[k]:
-                # Non-singleton decreasing subsequence is finished,
-                # update first entry.
-                yhat[i] = sum_wy / sum_w
-                w[i] = sum_w
-                target[i] = k - 1
-                target[k - 1] = i
-                if i > 0:
-                    # Backtrack if we can.  This makes the algorithm
-                    # single-pass and ensures O(n) complexity.
-                    i = target[i - 1]
-                # Otherwise, restart from the same point.
-                break
-    # Reconstruct the solution.
-    i = 0
-    while i < n:
-        k = target[i] + 1
-        yhat[i + 1 : k] = [yhat[i]]*(max(k-1-i,0))
-        i = k
-    return sum([(a - b)**2 for a,b in zip(y,yhat)])
+def l1_isotonic_score(y):
+  """L1 isotonic regression O(n log n) solver described in
+  "Isotonic Regression by Dynamic Programming" by Gunter Rote
+
+  Return the L1 error of the L1 unweighted isotonic fit
+  """
+  h = []  # initialize heap to construct subproblem function
+  p = []  # breakpoints of the subproblem function
+  for k in range(len(y)):
+    heapq.heappush(h, -y[k])
+    heapq.heappush(h, -y[k]) # Add new breakpoint twice (log n step)
+    heapq.heappop(h) # Remove the rightmost once
+    p.append(-h[0]) # Keep the rightmost continue
+  yhat = list(itertools.accumulate(p[::-1], min))  # resulting estimator
+  return sum([abs(a-b) for a,b in zip(y,yhat[::-1])]) # L1 error
 
 # Given a distribution of funds in mixdepths arranged in cyclic order,
 # compute the isotonic score for all possible linear orders or cuts.
@@ -75,7 +47,7 @@ def PAVA_score(y):
 def rank_best_order(y):
     scores = [0]*len(y)
     for i in range(len(y)):
-        scores[i] = PAVA_score(y[i:]+y[:i])
+        scores[i] = l1_isotonic_score(y[i:]+y[:i])
     return min(range(len(y)), key = scores.__getitem__)
 
 class YieldGeneratorIsotonic(YieldGeneratorBasic):
