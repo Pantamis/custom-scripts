@@ -35,20 +35,9 @@ def l1_isotonic_score(y):
     heapq.heappush(h, -y[k])
     heapq.heappush(h, -y[k]) # Add new breakpoint twice (log n step)
     heapq.heappop(h) # Remove the rightmost once
-    p.append(-h[0]) # Keep the rightmost continue
+    p.append(-h[0]) # Keep the rightmost and continue
   yhat = list(itertools.accumulate(p[::-1], min))  # resulting estimator
   return sum([abs(a-b) for a,b in zip(y,yhat[::-1])]) # L1 error
-
-# Given a distribution of funds in mixdepths arranged in cyclic order,
-# compute the isotonic score for all possible linear orders or cuts.
-# Return the rank where the first mixdepth for the optimal linear
-# order is.
-
-def rank_best_order(y):
-    scores = [0]*len(y)
-    for i in range(len(y)):
-        scores[i] = l1_isotonic_score(y[i:]+y[:i])
-    return min(range(len(y)), key = scores.__getitem__)
 
 class YieldGeneratorIsotonic(YieldGeneratorBasic):
 
@@ -56,21 +45,32 @@ class YieldGeneratorIsotonic(YieldGeneratorBasic):
         super().__init__(wallet_service, offerconfig)
         mix_balance = wallet_service.get_balance_by_mixdepth(verbose=False, minconfs=1)
         self.rank = None
-        
+    
+    def update_rank(self):
+        """Given a distribution of funds in mixdepths arranged in cyclic order,
+        compute the isotonic score for all possible linear orders or cuts
+        and update the optimal rank for linear ordering of mixdepths
+        in increasing amount (unconfirmed amounts included)"""
+        unconf_bal = [b for m,b in sorted(self.get_balance_by_mixdepth(verbose=False).items())]
+        scores = []
+        for i in range(len(unconf_bal)): # For a linear order stating at rank i
+            scores.append(l1_isotonic_score(y[i:]+y[:i])) # Compute its score and save it
+        self.rank = min(range(len(scores)), key = scores.__getitem__) # Return the lowest
+
     def select_input_mixdepth(self, available, offer, amount):
         """Returns the smallest mixdepth that can be chosen from, i.e. has enough 
         balance but after the rank defining the linear order of mixdepths for which 
-        balances are increasing. This rank is computed with PAVA when order is created.
+        balances are increasing. This rank must be computed when order was created.
         """
         available = sorted(available.items(), 
-                           key = lambda entry: (entry[0] - self.rank)%(self.wallet_service.mixdepth + 1))
+                           key = lambda entry: 
+                           (entry[0] - self.rank)%(self.wallet_service.mixdepth + 1))
         return available[0][0]
     
     def create_my_orders(self):
         mix_balance = self.get_available_mixdepths()
-        # Update the optimal rank for linear order now to fill potential orders without delay
-        # For each possible linear order of the mixdepth, we compute the isotonic score
-        self.rank = rank_best_order([b for m, b in sorted(mix_balance.items())])
+        # Update the optimal rank now to fill potential orders without delay
+        self.update_rank()
         jlog.info('Arrangement in linear order starting from mixdepth '+ str(self.rank))
         # We publish ONLY the maximum amount and use minsize for lower bound;
         # leave it to oid_to_order to figure out the right depth to use.
