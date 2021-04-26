@@ -54,7 +54,7 @@ class YieldGeneratorIsotonic(YieldGeneratorBasic):
         unconf_bal = [b for m,b in sorted(self.get_balance_by_mixdepth(verbose=False).items())]
         scores = []
         for i in range(len(unconf_bal)): # For a linear order stating at rank i
-            scores.append(l1_isotonic_score(y[i:]+y[:i])) # Compute its score and save it
+            scores.append(l1_isotonic_score(unconf_bal[i:]+unconf_bal[:i])) # Compute its score
         self.rank = min(range(len(scores)), key = scores.__getitem__) # Return the lowest
 
     def select_input_mixdepth(self, available, offer, amount):
