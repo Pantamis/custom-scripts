@@ -2,6 +2,8 @@
 from future.utils import iteritems
 
 import random
+import heapq
+import itertools
 
 from jmbase import get_log, jmprint
 from jmclient import YieldGeneratorBasic, ygmain, jm_single
@@ -51,7 +53,7 @@ class YieldGeneratorIsotonic(YieldGeneratorBasic):
         compute the isotonic score for all possible linear orders or cuts
         and update the optimal rank for linear ordering of mixdepths
         in increasing amount (unconfirmed amounts included)"""
-        unconf_bal = [b for m,b in sorted(self.get_balance_by_mixdepth(verbose=False).items())]
+        unconf_bal = [b for m,b in sorted(self.wallet_service.get_balance_by_mixdepth(verbose=False).items())]
         scores = []
         for i in range(len(unconf_bal)): # For a linear order stating at rank i
             scores.append(l1_isotonic_score(unconf_bal[i:]+unconf_bal[:i])) # Compute its score
